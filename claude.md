@@ -291,3 +291,26 @@ AutoCAD 2025 发生了重大变革，从 .NET Framework 迁移到了 **.NET 8.0*
 1. `src/CadLockPlugin.csproj` -> 编译生成 `CadLockPlugin.dll`（AutoCAD 版）；
 2. `src/CadLockPlugin.ZWCAD.csproj` -> 编译生成 `CadLockPlugin.ZWCAD.dll`（中望CAD 版）。
 编译时执行一次 `dotnet build CadLockPlugin.sln -c Release` 即可同时生成两个平台的最新二进制产物。
+
+
+---
+
+## 七、WinForms 交互对话框 (LockForm) 深度还原与增强
+
+通过对原版 `lockdwg.dll` 中 `lock.Form1` 的逆向，提取出其完整的控件、默认值与 ToolTip 提示文本，重构了更加美观、符合 CAD 用户操作习惯的图形对话框 [LockForm.cs](file:///D:/安装程序/CAD图纸加密插件lock/CAD图纸加密插件lock/src/UI/LockForm.cs)：
+
+1. **参数设置组**：
+   * **分块数量**：默认 100，鼠标悬停 ToolTip 提示；
+   * **加密次数**：默认 10，鼠标悬停 ToolTip 提示。
+2. **安全保护复选区**：
+   * `[√] 不可炸开 (核心)`：默认勾选且锁定不可取消（Explodable=false 核心技术）；
+   * `[ ] 不可捕捉`：悬浮提示“选不中，也无法捕捉点，仅能查看”；
+   * `[ ] 不可打印`：悬浮提示“针对加密部分不可打印，PLOT 输出空白”；
+   * `[ ] 不可复制`：悬浮提示“禁止通过剪贴板或写块将加密图元提取出去”；
+   * `[ ] 不可删除`：悬浮提示“对加密图元启用删除保护，执行 ERASE 时底层自动反擦除”。
+3. **三大一键操作大按钮**：
+   * `① 选择对象加密`（点击后返回视口手动框选局部图元）；
+   * `② 全图自动加密`（点击直接对当前模型空间所有图元打包加密）；
+   * `③ 批量图纸加密`（点击弹出文件多选框后台离线批量转换）。
+4. **警示提示框**：
+   * 橙黄色警示背景框，提醒用户操作前先备份原图纸。
