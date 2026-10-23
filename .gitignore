@@ -1,0 +1,12 @@
+# Visual Studio / .NET 临时与构建文件
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+*.tmp
+
+# 本地备份原文件 (按需保留或提交)
+*.dwg
