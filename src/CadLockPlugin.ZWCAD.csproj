@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <OutputPath>..\bin\ZWCAD\$(Configuration)\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <DefineConstants>$(DefineConstants);ZWCAD</DefineConstants>
+    <NoWarn>NU1900;NU1901;NU1902;NU1903;NU1904</NoWarn>
+    <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
+    <AssemblyName>CadLockPlugin.ZWCAD</AssemblyName>
+    <AssemblyTitle>CAD图纸加密保护插件(中望CAD版)</AssemblyTitle>
+    <AssemblyDescription>ZWCAD Drawing Lock &amp; Encryption Plugin</AssemblyDescription>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+  </PropertyGroup>
+
+  <!-- 中望CAD 依赖库路径 (指向本地中望CAD安装目录) -->
+  <PropertyGroup>
+    <ZwCadDir Condition="'$(ZwCadDir)' == ''">D:\Program Files\ZWSOFT\ZWCAD 2024</ZwCadDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="ZwDatabaseMgd">
+      <HintPath>$(ZwCadDir)\ZwDatabaseMgd.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="ZwManaged">
+      <HintPath>$(ZwCadDir)\ZwManaged.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+  </ItemGroup>
+
+</Project>

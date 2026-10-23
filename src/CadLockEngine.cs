@@ -1,8 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+
+#if ZWCAD
+using ZwSoft.ZwCAD.DatabaseServices;
+using ZwSoft.ZwCAD.Geometry;
+#else
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.Geometry;
+#endif
 
 namespace CadLockPlugin
 {
@@ -112,7 +118,7 @@ namespace CadLockPlugin
                     var btr = new BlockTableRecord
                     {
                         Name = "*U",        // 匿名块
-                        Explodable = false  // 核心：AutoCAD 炸开命令 EXPLODE 拒绝炸开！
+                        Explodable = false  // 核心：CAD 炸开命令 EXPLODE 拒绝炸开！
                     };
 
                     ObjectId btrId = bt.Add(btr);

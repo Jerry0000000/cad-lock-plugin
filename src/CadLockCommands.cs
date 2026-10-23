@@ -2,12 +2,23 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Windows.Forms;
+using CadLockPlugin.UI;
+
+#if ZWCAD
+using ZwSoft.ZwCAD.ApplicationServices;
+using ZwSoft.ZwCAD.DatabaseServices;
+using ZwSoft.ZwCAD.EditorInput;
+using ZwSoft.ZwCAD.Runtime;
+using Application = ZwSoft.ZwCAD.ApplicationServices.Application;
+using CadApp = ZwSoft.ZwCAD.ApplicationServices.Application;
+#else
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
 using Autodesk.AutoCAD.EditorInput;
 using Autodesk.AutoCAD.Runtime;
-using CadLockPlugin.UI;
 using Application = Autodesk.AutoCAD.ApplicationServices.Core.Application;
+using CadApp = Autodesk.AutoCAD.ApplicationServices.Application;
+#endif
 
 [assembly: ExtensionApplication(typeof(CadLockPlugin.CadLockApp))]
 [assembly: CommandClass(typeof(CadLockPlugin.CadLockCommands))]
@@ -20,7 +31,11 @@ namespace CadLockPlugin
         {
             var ed = Application.DocumentManager.MdiActiveDocument?.Editor;
             ed?.WriteMessage("\n=============================================");
-            ed?.WriteMessage("\n CAD 图纸加密保护插件已成功加载！");
+#if ZWCAD
+            ed?.WriteMessage("\n CAD 图纸加密保护插件 (中望CAD版) 已成功加载！");
+#else
+            ed?.WriteMessage("\n CAD 图纸加密保护插件 (AutoCAD版) 已成功加载！");
+#endif
             ed?.WriteMessage("\n 输入命令 LOCK 弹出加密配置面板");
             ed?.WriteMessage("\n 输入命令 BATLOCK 快速批量加密");
             ed?.WriteMessage("\n 输入命令 STOPEX 卸载防护事件钩子");
@@ -44,7 +59,7 @@ namespace CadLockPlugin
 
             // 1. 弹出设置窗体
             using var form = new LockForm();
-            var res = Autodesk.AutoCAD.ApplicationServices.Application.ShowModalDialog(form);
+            var res = CadApp.ShowModalDialog(form);
             if (res != DialogResult.OK) return;
 
             var options = form.Options;
@@ -64,7 +79,7 @@ namespace CadLockPlugin
                 {
                     if (CadLockEngine.IsDrawingLocked(db, tr))
                     {
-                        Application.ShowAlertDialog("【提示】当前图纸已经过加密处理，无法再次加密！");
+                        CadApp.ShowAlertDialog("【提示】当前图纸已经过加密处理，无法再次加密！");
                         return;
                     }
                     tr.Commit();
@@ -139,7 +154,7 @@ namespace CadLockPlugin
             using var ofd = new OpenFileDialog
             {
                 Title = "请选择要加密的 DWG 图纸 (可多选)",
-                Filter = "AutoCAD 图纸 (*.dwg)|*.dwg",
+                Filter = "CAD 图纸 (*.dwg)|*.dwg",
                 Multiselect = true
             };
 

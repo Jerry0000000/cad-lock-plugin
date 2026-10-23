@@ -4,6 +4,8 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CadLockPlugin", "src\CadLockPlugin.csproj", "{4B34C8F5-85A3-4819-B647-BCDE6FA23E45}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "CadLockPlugin.ZWCAD", "src\CadLockPlugin.ZWCAD.csproj", "{8F12E5A6-39D4-4B7C-9023-CD7E19284F56}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -14,6 +16,10 @@ Global
 		{4B34C8F5-85A3-4819-B647-BCDE6FA23E45}.Debug|x64.Build.0 = Debug|x64
 		{4B34C8F5-85A3-4819-B647-BCDE6FA23E45}.Release|x64.ActiveCfg = Release|x64
 		{4B34C8F5-85A3-4819-B647-BCDE6FA23E45}.Release|x64.Build.0 = Release|x64
+		{8F12E5A6-39D4-4B7C-9023-CD7E19284F56}.Debug|x64.ActiveCfg = Debug|x64
+		{8F12E5A6-39D4-4B7C-9023-CD7E19284F56}.Debug|x64.Build.0 = Debug|x64
+		{8F12E5A6-39D4-4B7C-9023-CD7E19284F56}.Release|x64.ActiveCfg = Release|x64
+		{8F12E5A6-39D4-4B7C-9023-CD7E19284F56}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

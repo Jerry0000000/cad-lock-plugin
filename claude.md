@@ -263,3 +263,31 @@ AutoCAD 2025 发生了重大变革，从 .NET Framework 迁移到了 **.NET 8.0*
 1. **日常维护与修改**：使用 Visual Studio 打开根目录下的 `CadLockPlugin.sln` 即可享受完整的 IntelliSense 与调试功能；
 2. **构建发布**：执行 `dotnet build CadLockPlugin.sln -c Release`，编译生成的 DLL 自动输出到 `bin/Release/CadLockPlugin.dll` 及项目根目录；
 3. **版本控制**：当前工程已初始化标准 Git 仓库，编译产物与临时文件已被 `.gitignore` 过滤，随时可通过 `git commit` 跟踪每一次修改。
+
+
+---
+
+## 六、中望CAD (ZWCAD) 双平台无缝适配扩展
+
+为了支持国产 CAD 软件（中望CAD ZWCAD），我们在现有架构基础上进行了双平台跨端升级：
+
+### 1. ZWCAD .NET API 特征分析
+探测本地 `D:\Program Files\ZWSOFT\ZWCAD 2024` 的程序集架构：
+* 依赖库：
+  * `ZwDatabaseMgd.dll`（对应 AutoCAD 的 `acdbmgd.dll`）
+  * `ZwManaged.dll`（对应 AutoCAD 的 `accoremgd.dll` + `acmgd.dll`）
+* 命名空间对照：
+  * `Autodesk.AutoCAD.Runtime` -> `ZwSoft.ZwCAD.Runtime`
+  * `Autodesk.AutoCAD.DatabaseServices` -> `ZwSoft.ZwCAD.DatabaseServices`
+  * `Autodesk.AutoCAD.Geometry` -> `ZwSoft.ZwCAD.Geometry`
+  * `Autodesk.AutoCAD.ApplicationServices` -> `ZwSoft.ZwCAD.ApplicationServices`
+  * `Autodesk.AutoCAD.EditorInput` -> `ZwSoft.ZwCAD.EditorInput`
+
+### 2. 单一代码库（Zero Code Duplication）架构
+通过条件编译符号 `#if ZWCAD`，使所有核心代码（算法引擎、事件监听、命令调度）保持 100% 共享，完全消除重复代码维护成本。
+
+### 3. 多工程并行管理
+在 `CadLockPlugin.sln` 解决方案中挂载两个工程：
+1. `src/CadLockPlugin.csproj` -> 编译生成 `CadLockPlugin.dll`（AutoCAD 版）；
+2. `src/CadLockPlugin.ZWCAD.csproj` -> 编译生成 `CadLockPlugin.ZWCAD.dll`（中望CAD 版）。
+编译时执行一次 `dotnet build CadLockPlugin.sln -c Release` 即可同时生成两个平台的最新二进制产物。

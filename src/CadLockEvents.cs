@@ -1,7 +1,13 @@
 using System;
 using System.Collections.Generic;
+
+#if ZWCAD
+using ZwSoft.ZwCAD.ApplicationServices;
+using ZwSoft.ZwCAD.DatabaseServices;
+#else
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
+#endif
 
 namespace CadLockPlugin
 {
