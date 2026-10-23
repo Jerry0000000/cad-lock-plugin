@@ -57,16 +57,16 @@ namespace CadLockPlugin
             var db = doc.Database;
             var ed = doc.Editor;
 
-            // 1. 弹出设置窗体
+            // 1. 弹出设置窗体对话框
             using var form = new LockForm();
             var res = CadApp.ShowModalDialog(form);
-            if (res != DialogResult.OK) return;
+            if (res != DialogResult.OK || form.UserAction == LockForm.ActionType.None) return;
 
             var options = form.Options;
-            var mode = form.SelectedMode;
+            var action = form.UserAction;
 
             // 2. 批量处理模式
-            if (mode == LockForm.LockMode.BatchFiles)
+            if (action == LockForm.ActionType.BatchFiles)
             {
                 RunBatchLock(options);
                 return;
@@ -87,7 +87,7 @@ namespace CadLockPlugin
 
                 var targetEntities = new List<ObjectId>();
 
-                if (mode == LockForm.LockMode.SelectObjects)
+                if (action == LockForm.ActionType.SelectObjects)
                 {
                     var pso = new PromptSelectionOptions
                     {
@@ -97,7 +97,7 @@ namespace CadLockPlugin
                     if (selRes.Status != PromptStatus.OK) return;
                     targetEntities.AddRange(selRes.Value.GetObjectIds());
                 }
-                else // EntireDrawing
+                else // EntireDrawing 全图自动加密
                 {
                     using (var tr = db.TransactionManager.StartTransaction())
                     {
@@ -142,7 +142,7 @@ namespace CadLockPlugin
         {
             var options = new CadLockOptions
             {
-                SplitCount = 10,
+                SplitCount = 100,
                 RepeatCount = 10
             };
             RunBatchLock(options);
