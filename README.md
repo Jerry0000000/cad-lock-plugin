@@ -111,6 +111,9 @@ dotnet build CadLockPlugin.sln -c Release
 ```
 或者在 Visual Studio 中打开 `CadLockPlugin.sln`，点击“生成解决方案”即可。
 
-### 2. 路径配置
+### 2. 发布产物
+根目录的 `CadLockPlugin.dll` / `CadLockPlugin.ZWCAD.dll` 是随仓库发布的 Release 产物（v1.1.0 起入库）。重新编译后请把这两个文件一并提交，避免源码与发布件脱节。
+
+### 3. 路径配置
 * AutoCAD 依赖路径在 [src/CadLockPlugin.csproj](file:///D:/安装程序/CAD图纸加密插件lock/CAD图纸加密插件lock/src/CadLockPlugin.csproj) 中的 `<AutoCADDir>` 配置（默认 `D:\Program Files\Autodesk\AutoCAD 2020`）；
 * 中望CAD 依赖路径在 [src/CadLockPlugin.ZWCAD.csproj](file:///D:/安装程序/CAD图纸加密插件lock/CAD图纸加密插件lock/src/CadLockPlugin.ZWCAD.csproj) 中的 `<ZwCadDir>` 配置（默认 `D:\Program Files\ZWSOFT\ZWCAD 2024`）。
