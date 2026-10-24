@@ -114,6 +114,27 @@ dotnet build CadLockPlugin.sln -c Release
 ### 2. 发布产物
 根目录的 `CadLockPlugin.dll` / `CadLockPlugin.ZWCAD.dll` 是随仓库发布的 Release 产物（v1.1.0 起入库）。重新编译后请把这两个文件一并提交，避免源码与发布件脱节。
 
-### 3. 路径配置
+### 3. 一键发布脚本
+
+仓库根目录的 `release.sh`（Git Bash 执行）把发版流程串起来：
+
+```bash
+./release.sh 1.2.0                    # 完整发布
+./release.sh 1.2.0 --dry-run          # 只演练，不改仓库、不推送
+./release.sh 1.2.0 --notes-file n.md  # 用自定义发布说明
+```
+
+它会依次完成：
+
+1. 把 `x.y.z` 写入两个 csproj 的 `AssemblyVersion` / `FileVersion`；
+2. `dotnet build` 双平台 + 冒烟测试工程；
+3. 复制两个 DLL 到根目录并打印 SHA256（同一份校验值会写进 Release 说明）；
+4. 提交版本号与产物（`chore(release): vX.Y.Z 编译产物`）；
+5. 打附注标签 `vX.Y.Z` 并推送分支与标签；
+6. `gh release create` 创建 Release 并上传两个 DLL（说明由上个标签以来的提交自动汇总）。
+
+前置条件：`dotnet`、`gh`（已 `gh auth login`）、工作区无未提交改动、标签未被占用；任一不满足会直接报错退出。
+
+### 4. 路径配置
 * AutoCAD 依赖路径在 [src/CadLockPlugin.csproj](file:///D:/安装程序/CAD图纸加密插件lock/CAD图纸加密插件lock/src/CadLockPlugin.csproj) 中的 `<AutoCADDir>` 配置（默认 `D:\Program Files\Autodesk\AutoCAD 2020`）；
 * 中望CAD 依赖路径在 [src/CadLockPlugin.ZWCAD.csproj](file:///D:/安装程序/CAD图纸加密插件lock/CAD图纸加密插件lock/src/CadLockPlugin.ZWCAD.csproj) 中的 `<ZwCadDir>` 配置（默认 `D:\Program Files\ZWSOFT\ZWCAD 2024`）。
