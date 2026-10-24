@@ -14,8 +14,8 @@
     <AssemblyName>CadLockPlugin.ZWCAD</AssemblyName>
     <AssemblyTitle>CAD图纸加密保护插件(中望CAD版)</AssemblyTitle>
     <AssemblyDescription>ZWCAD Drawing Lock &amp; Encryption Plugin</AssemblyDescription>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
-    <FileVersion>1.1.0.0</FileVersion>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <FileVersion>1.2.0.0</FileVersion>
   </PropertyGroup>
 
   <!-- 中望CAD 依赖库路径 (指向本地中望CAD安装目录) -->

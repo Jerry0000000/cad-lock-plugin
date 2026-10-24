@@ -15,7 +15,7 @@ D:\安装程序\CAD图纸加密插件lock\CAD图纸加密插件lock\
 ├── CadLockPlugin.dll              # 【AutoCAD 版】编译生成的可直接使用插件
 ├── CadLockPlugin.ZWCAD.dll        # 【中望CAD 版】编译生成的可直接使用插件
 ├── README.md                      # 开发与维护指南
-├── claude.md                      # 逆向剖析与编程全过程记录文档
+├── claude.md                      # 开发与维护指南（含旧版兼容、构建、测试说明）
 ├── lockdwg.dll                    # 原插件备份
 ├── 使用说明.txt                   # 原插件说明文档
 │
@@ -65,6 +65,17 @@ D:\安装程序\CAD图纸加密插件lock\CAD图纸加密插件lock\
 > 说明：批量加密/解锁会同时处理**模型空间与全部布局(图纸空间)**，避免“整图在布局里”的图纸批量加密后毫无变化。
 > 未找到可加密图元的文件会被明确标记为「跳过」并给出原因，不再静默报告成功。
 
+### 旧版 lockdwg.dll 文件兼容（v1.2.0+）
+
+旧版工具生成的 `_lock.dwg` 使用 `*ACADLOCKLAYER` 图层，顶层经常只剩空 `MINSERT`，和当前格式（`ACAD_LOCK_LAYER` + `*U` 匿名块）不同。
+
+* 当前插件能识别 `*ACADLOCKLAYER` / `ACADLOCKLAYER` / `*ACADLOCKLAYERM` / `ACADLOCKLAYERM`，图层守护与解锁会覆盖旧图层；
+* 批量解锁遇到拆不动的旧文件时，会尝试读取同目录同名 `.bak`（如 `图纸_lock.dwg` → `图纸_lock.bak`），把 `.bak` 解锁后输出 `图纸_lock_unlock.dwg`；
+* 没有可用 `.bak` 时不会强行修改旧文件，而是标记「跳过」并提示使用原始 DWG；
+* 旧版 `_lock.dwg` 不建议再执行批量加密，会因 `ACAD_LOCK` 标记被跳过。
+
+> 旧工具可能已破坏块引用；恢复前务必备份。最稳妥的方式始终是拿**原始 `.dwg`** 重新加密。
+
 ---
 
 ## 四、防护机制说明（请务必了解）
@@ -112,7 +123,7 @@ dotnet build CadLockPlugin.sln -c Release
 或者在 Visual Studio 中打开 `CadLockPlugin.sln`，点击“生成解决方案”即可。
 
 ### 2. 发布产物
-根目录的 `CadLockPlugin.dll` / `CadLockPlugin.ZWCAD.dll` 是随仓库发布的 Release 产物（v1.1.0 起入库）。重新编译后请把这两个文件一并提交，避免源码与发布件脱节。
+根目录的 `CadLockPlugin.dll` / `CadLockPlugin.ZWCAD.dll` 是随仓库发布的 Release 产物（v1.1.0 起入库，当前源码 v1.2.0）。重新编译后请把这两个文件一并提交，避免源码与发布件脱节。
 
 ### 3. 一键发布脚本
 

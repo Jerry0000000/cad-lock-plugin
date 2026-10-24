@@ -82,6 +82,8 @@ namespace CadLockSmoke
                     var filtered = CadLockEngine.FilterLockableEntities(db, tr, all);
                     TestLog.Check(filtered.Count == 5, "过滤锁定图层图元：期望 5，实际 " + filtered.Count);
                     TestLog.Check(!filtered.Contains(circleId), "锁定图层上的图元被排除");
+                    TestLog.Check(CadLockEngine.IsLockLayerName(CadLockEngine.LockLayerName), "识别当前加密图层名");
+                    TestLog.Check(CadLockEngine.IsLockLayerName("*ACADLOCKLAYER"), "识别旧版加密图层名");
 
                     tr.Commit();
                 }

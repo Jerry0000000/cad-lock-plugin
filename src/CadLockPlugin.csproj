@@ -12,8 +12,8 @@
     <RestoreIgnoreFailedSources>true</RestoreIgnoreFailedSources>
     <AssemblyTitle>CAD图纸加密保护插件</AssemblyTitle>
     <AssemblyDescription>AutoCAD Drawing Lock &amp; Encryption Plugin</AssemblyDescription>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
-    <FileVersion>1.1.0.0</FileVersion>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
+    <FileVersion>1.2.0.0</FileVersion>
   </PropertyGroup>
 
   <!-- AutoCAD 依赖库路径 (指向本地 AutoCAD 安装目录) -->

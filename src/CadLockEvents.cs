@@ -347,8 +347,8 @@ namespace CadLockPlugin
                         options = CadLockEngine.LoadProtectionOptions(db, tr)
                                   ?? new CadLockOptions { DisableSelect = true, DisableDelete = true };
 
-                        ObjectId layerId = CadLockEngine.FindLockLayerId(db, tr);
-                        if (!layerId.IsNull)
+                        // 同时处理当前格式和旧版 lockdwg.dll 图层；旧图纸里可能只有 *ACADLOCKLAYER
+                        foreach (ObjectId layerId in CadLockEngine.FindLockLayerIds(db, tr))
                         {
                             var layer = tr.GetObject(layerId, OpenMode.ForWrite, false) as LayerTableRecord;
                             if (layer != null &&
@@ -449,7 +449,7 @@ namespace CadLockPlugin
             try
             {
                 if (!(e.DBObject is LayerTableRecord layer)) return;
-                if (!string.Equals(layer.Name, CadLockEngine.LockLayerName, StringComparison.OrdinalIgnoreCase)) return;
+                if (!CadLockEngine.IsLockLayerName(layer.Name)) return;
             }
             catch
             {
@@ -465,7 +465,7 @@ namespace CadLockPlugin
             try
             {
                 if (!(e.DBObject is LayerTableRecord layer)) return;
-                if (!string.Equals(layer.Name, CadLockEngine.LockLayerName, StringComparison.OrdinalIgnoreCase)) return;
+                if (!CadLockEngine.IsLockLayerName(layer.Name)) return;
 
                 var options = state.Options;
                 if (options == null) return;
@@ -664,32 +664,22 @@ namespace CadLockPlugin
                         return;
                     }
 
-                    ObjectId layerId = CadLockEngine.FindLockLayerId(db, tr);
-                    if (layerId.IsNull)
+                    foreach (ObjectId layerId in CadLockEngine.FindLockLayerIds(db, tr))
                     {
-                        tr.Abort();
-                        return;
-                    }
+                        var layer = tr.GetObject(layerId, OpenMode.ForWrite, false) as LayerTableRecord;
+                        if (layer == null) continue;
 
-                    var layer = tr.GetObject(layerId, OpenMode.ForWrite, false) as LayerTableRecord;
-                    if (layer == null)
-                    {
-                        tr.Abort();
-                        return;
+                        if (layer.IsLocked != options.DisableSelect)
+                        {
+                            layer.IsLocked = options.DisableSelect;
+                            applied = true;
+                        }
+                        if (layer.IsPlottable != !options.DisablePlot)
+                        {
+                            layer.IsPlottable = !options.DisablePlot;
+                            applied = true;
+                        }
                     }
-
-                    if (layer.IsLocked != options.DisableSelect)
-                    {
-                        layer.IsLocked = options.DisableSelect;
-                        applied = true;
-                    }
-
-                    if (layer.IsPlottable != !options.DisablePlot)
-                    {
-                        layer.IsPlottable = !options.DisablePlot;
-                        applied = true;
-                    }
-
                     if (applied) tr.Commit(); else tr.Abort();
                 }
             }

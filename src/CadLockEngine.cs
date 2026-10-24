@@ -17,6 +17,18 @@ namespace CadLockPlugin
         public const string LockDictionaryKey = "ACAD_LOCK";
         public const string LockLayerName = "ACAD_LOCK_LAYER";
 
+        /// <summary>
+        /// 旧版 lockdwg.dll 使用的锁定图层名。旧版文件里实际见到的是带星号的
+        /// "*ACADLOCKLAYER"；同时兼容不带星号和 M 后缀的变体，方便读取早期图纸。
+        /// </summary>
+        private static readonly string[] LegacyLockLayerNames =
+        {
+            "*ACADLOCKLAYER",
+            "ACADLOCKLAYER",
+            "*ACADLOCKLAYERM",
+            "ACADLOCKLAYERM"
+        };
+
         /// <summary>加密时使用的保护选项，随图纸保存，重新打开后据此恢复防护</summary>
         public const string LockOptionsKey = "OPTIONS";
 
@@ -136,8 +148,9 @@ namespace CadLockPlugin
         public static List<ObjectId> GetLockedBlockIds(Database db, Transaction tr)
         {
             var result = new List<ObjectId>();
-            ObjectId lockLayerId = FindLockLayerId(db, tr);
-            if (lockLayerId.IsNull) return result;
+            List<ObjectId> lockLayerIds = FindLockLayerIds(db, tr);
+            if (lockLayerIds.Count == 0) return result;
+            var lockLayerSet = new HashSet<ObjectId>(lockLayerIds);
 
             foreach (var spaceId in GetAllSpaceIds(db, tr))
             {
@@ -146,7 +159,7 @@ namespace CadLockPlugin
                     try
                     {
                         var br = tr.GetObject(id, OpenMode.ForRead, false) as BlockReference;
-                        if (br != null && br.LayerId == lockLayerId)
+                        if (br != null && lockLayerSet.Contains(br.LayerId))
                         {
                             result.Add(id);
                         }
@@ -162,12 +175,66 @@ namespace CadLockPlugin
         }
 
         /// <summary>
-        /// 查找加密专用图层
+        /// 查找所有可识别的加密图层：当前格式 + 旧版 lockdwg.dll 格式。
+        /// 顺序为当前格式优先，旧格式在后。
+        /// </summary>
+        public static List<ObjectId> FindLockLayerIds(Database db, Transaction tr)
+        {
+            var result = new List<ObjectId>();
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+
+            AddLayerIfExists(lt, LockLayerName, result);
+            foreach (string name in LegacyLockLayerNames)
+            {
+                AddLayerIfExists(lt, name, result);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// 只查找旧版 lockdwg.dll 图层，用于判断是否为旧格式文件。
+        /// </summary>
+        public static List<ObjectId> FindLegacyLockLayerIds(Database db, Transaction tr)
+        {
+            var result = new List<ObjectId>();
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            foreach (string name in LegacyLockLayerNames)
+            {
+                AddLayerIfExists(lt, name, result);
+            }
+            return result;
+        }
+
+        private static void AddLayerIfExists(LayerTable lt, string name, List<ObjectId> result)
+        {
+            if (!lt.Has(name)) return;
+            ObjectId id = lt[name];
+            if (id.IsNull || result.Contains(id)) return;
+            result.Add(id);
+        }
+
+        /// <summary>
+        /// 图层名是否属于加密图层（当前格式或旧格式）。
+        /// </summary>
+        public static bool IsLockLayerName(string layerName)
+        {
+            if (string.IsNullOrEmpty(layerName)) return false;
+            if (string.Equals(layerName, LockLayerName, StringComparison.OrdinalIgnoreCase)) return true;
+            foreach (string name in LegacyLockLayerNames)
+            {
+                if (string.Equals(layerName, name, StringComparison.OrdinalIgnoreCase)) return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// 兼容旧调用：返回第一个加密图层（当前格式优先）。
+        /// 需要同时处理新旧图层时请使用 FindLockLayerIds。
         /// </summary>
         public static ObjectId FindLockLayerId(Database db, Transaction tr)
         {
-            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
-            return lt.Has(LockLayerName) ? lt[LockLayerName] : ObjectId.Null;
+            List<ObjectId> ids = FindLockLayerIds(db, tr);
+            return ids.Count > 0 ? ids[0] : ObjectId.Null;
         }
 
         /// <summary>
@@ -206,13 +273,13 @@ namespace CadLockPlugin
         /// </summary>
         public static void ResetLockLayer(Database db, Transaction tr)
         {
-            ObjectId layerId = FindLockLayerId(db, tr);
-            if (layerId.IsNull) return;
-
-            var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite, false);
-            if (layer == null) return;
-            layer.IsLocked = false;
-            layer.IsPlottable = true;
+            foreach (ObjectId layerId in FindLockLayerIds(db, tr))
+            {
+                var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite, false);
+                if (layer == null) continue;
+                layer.IsLocked = false;
+                layer.IsPlottable = true;
+            }
         }
 
         /// <summary>
@@ -280,7 +347,8 @@ namespace CadLockPlugin
             var result = new List<ObjectId>();
             if (ids == null) return result;
 
-            ObjectId lockLayerId = FindLockLayerId(db, tr);
+            List<ObjectId> lockLayerIds = FindLockLayerIds(db, tr);
+            var lockLayerSet = new HashSet<ObjectId>(lockLayerIds);
             var layerLockCache = new Dictionary<ObjectId, bool>();
 
             foreach (var id in ids)
@@ -303,8 +371,8 @@ namespace CadLockPlugin
                 // 视口等对象不允许被 AppendEntity 到块定义中
                 if (ent is Viewport) continue;
 
-                // 已经在加密图层上的对象，避免重复封装
-                if (!lockLayerId.IsNull && ent.LayerId == lockLayerId) continue;
+                // 已经在加密图层上的对象（含旧版图层），避免重复封装
+                if (lockLayerSet.Contains(ent.LayerId)) continue;
 
                 // 锁定图层上的对象无法被擦除/克隆
                 if (IsLayerLocked(tr, ent.LayerId, layerLockCache)) continue;
@@ -460,11 +528,12 @@ namespace CadLockPlugin
         /// </summary>
         public static int UnlockSpaces(Database db, Transaction tr, IEnumerable<ObjectId> spaceIds)
         {
-            ObjectId lockLayerId = FindLockLayerId(db, tr);
-            if (lockLayerId.IsNull) return 0;
+            List<ObjectId> lockLayerIds = FindLockLayerIds(db, tr);
+            if (lockLayerIds.Count == 0) return 0;
 
             // 先解除图层锁定：锁定图层上的对象无法被擦除，否则加密块拆不掉
             ResetLockLayer(db, tr);
+            var lockLayerSet = new HashSet<ObjectId>(lockLayerIds);
 
             int count = 0;
 
@@ -472,7 +541,7 @@ namespace CadLockPlugin
             {
                 try
                 {
-                    count += UnlockSpace(tr, spaceId, lockLayerId);
+                    count += UnlockSpace(tr, spaceId, lockLayerSet);
                 }
                 catch
                 {
@@ -496,7 +565,7 @@ namespace CadLockPlugin
             return UnlockSpaces(db, tr, GetAllSpaceIds(db, tr));
         }
 
-        private static int UnlockSpace(Transaction tr, ObjectId spaceId, ObjectId lockLayerId)
+        private static int UnlockSpace(Transaction tr, ObjectId spaceId, HashSet<ObjectId> lockLayerIds)
         {
             // 必须 ForWrite：还原时要往该空间 AppendEntity，ForRead 会抛 eNotOpenForWrite
             var space = tr.GetObject(spaceId, OpenMode.ForWrite, false) as BlockTableRecord;
@@ -522,7 +591,7 @@ namespace CadLockPlugin
 
                     if (br == null) continue;
                     // 只处理放在加密图层上的块参照，避免误伤普通图块
-                    if (br.LayerId != lockLayerId) continue;
+                    if (!lockLayerIds.Contains(br.LayerId)) continue;
                     targets.Add(id);
                 }
 
@@ -633,7 +702,11 @@ namespace CadLockPlugin
                         {
                             if (IsDrawingLocked(db, tr))
                             {
-                                progressCallback?.Invoke(filePath, BatchLockResult.Skipped, "图纸已经过加密处理，已跳过");
+                                bool legacy = FindLegacyLockLayerIds(db, tr).Count > 0;
+                                progressCallback?.Invoke(filePath, BatchLockResult.Skipped,
+                                    legacy
+                                        ? "检测到旧版 lockdwg.dll 格式，无法直接重新加密；请使用原始 DWG 或先恢复旧文件"
+                                        : "图纸已经过加密处理，已跳过");
                                 continue;
                             }
 
@@ -677,7 +750,6 @@ namespace CadLockPlugin
         public static void BatchUnlockFiles(IEnumerable<string> filePaths, CadLockOptions options, Action<string, BatchLockResult, string>? progressCallback = null)
         {
             if (filePaths == null || options == null) return;
-
             foreach (var filePath in filePaths)
             {
                 if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
@@ -685,20 +757,21 @@ namespace CadLockPlugin
                     progressCallback?.Invoke(filePath ?? string.Empty, BatchLockResult.Failed, "文件不存在");
                     continue;
                 }
-
                 try
                 {
-                    string savedPath;
-
+                    bool legacy = false;
+                    bool fallback = false;
+                    string savedPath = string.Empty;
                     using (var db = new Database(false, true))
                     {
                         db.ReadDwgFile(filePath, FileOpenMode.OpenForReadAndAllShare, false, string.Empty);
                         db.CloseInput(true);
-
                         using (var tr = db.TransactionManager.StartTransaction())
                         {
                             bool marked = IsDrawingLocked(db, tr);
-                            bool hasLayer = !FindLockLayerId(db, tr).IsNull;
+                            List<ObjectId> lockLayerIds = FindLockLayerIds(db, tr);
+                            bool hasLayer = lockLayerIds.Count > 0;
+                            legacy = FindLegacyLockLayerIds(db, tr).Count > 0;
                             if (!marked && !hasLayer)
                             {
                                 progressCallback?.Invoke(filePath, BatchLockResult.Skipped, "图纸未被加密，无需解锁");
@@ -708,14 +781,41 @@ namespace CadLockPlugin
                             int unlocked = UnlockAllSpaces(db, tr);
                             if (unlocked == 0)
                             {
-                                progressCallback?.Invoke(filePath, BatchLockResult.Skipped, "未找到可还原的加密图形");
-                                continue;
+                                tr.Abort();
+                                // 旧版 lockdwg.dll 的 _lock.dwg 可能只剩空 MINSERT 占位，
+                                // 原内容往往保存在同名 .bak 中；仅旧格式才尝试该恢复路径。
+                                fallback = legacy;
+                                if (!fallback)
+                                {
+                                    progressCallback?.Invoke(filePath, BatchLockResult.Skipped, "未找到可还原的加密图形");
+                                    continue;
+                                }
                             }
-
-                            tr.Commit();
+                            else
+                            {
+                                tr.Commit();
+                            }
                         }
 
-                        savedPath = WriteDatabase(db, filePath, options.ReplaceOriginalFile, UnlockSuffix);
+                        // 旧格式需要先释放源数据库，再由 .bak 恢复；否则 replace 覆盖会被源文件占用。
+                        if (!fallback)
+                        {
+                            savedPath = WriteDatabase(db, filePath, options.ReplaceOriginalFile, UnlockSuffix);
+                        }
+                    }
+
+                    if (fallback)
+                    {
+                        if (TryRecoverLegacyBackup(filePath, options.ReplaceOriginalFile, out string recoveredPath, out string recoverMessage))
+                        {
+                            progressCallback?.Invoke(filePath, BatchLockResult.Success, recoverMessage);
+                        }
+                        else
+                        {
+                            progressCallback?.Invoke(filePath, BatchLockResult.Skipped,
+                                "旧版 lockdwg.dll 格式：没有可拆的加密块，且未找到可用的同名 .bak 备份；请使用原始 DWG 重新加密");
+                        }
+                        continue;
                     }
 
                     if (options.ReplaceOriginalFile)
@@ -724,7 +824,6 @@ namespace CadLockPlugin
                         savedPath = filePath;
                         CommitReplace(tempPath, filePath);
                     }
-
                     progressCallback?.Invoke(filePath, BatchLockResult.Success,
                         options.ReplaceOriginalFile ? "已解锁并覆盖原文件" : savedPath);
                 }
@@ -732,6 +831,60 @@ namespace CadLockPlugin
                 {
                     progressCallback?.Invoke(filePath, BatchLockResult.Failed, ex.Message);
                 }
+            }
+        }
+
+        /// <summary>
+        /// 旧格式恢复：旧版 lockdwg.dll 写出的 _lock.dwg 常常只剩空 MINSERT，
+        /// 但 AutoCAD 在覆盖保存前会生成同名 .bak。若 .bak 仍是可解锁的块结构，
+        /// 就把 .bak 解锁后的结果输出为 原文件名_unlock.dwg（或按选项覆盖原文件）。
+        /// 只在旧格式检测成立时调用，不会影响当前格式的正常解锁。
+        /// </summary>
+        private static bool TryRecoverLegacyBackup(string sourcePath, bool replaceOriginal, out string savedPath, out string message)
+        {
+            savedPath = string.Empty;
+            message = string.Empty;
+            string tempPath = string.Empty;
+
+            string backupPath = Path.ChangeExtension(sourcePath, ".bak");
+            if (!File.Exists(backupPath)) return false;
+
+            try
+            {
+                using (var db = new Database(false, true))
+                {
+                    db.ReadDwgFile(backupPath, FileOpenMode.OpenForReadAndAllShare, false, string.Empty);
+                    db.CloseInput(true);
+
+                    using (var tr = db.TransactionManager.StartTransaction())
+                    {
+                        if (FindLockLayerIds(db, tr).Count == 0) return false;
+                        if (GetLockedBlockIds(db, tr).Count == 0) return false;
+
+                        int unlocked = UnlockAllSpaces(db, tr);
+                        if (unlocked == 0) return false;
+                        tr.Commit();
+                    }
+
+                    savedPath = WriteDatabase(db, sourcePath, replaceOriginal, UnlockSuffix);
+                    if (replaceOriginal)
+                    {
+                        tempPath = savedPath;
+                    }
+                }
+                if (replaceOriginal)
+                {
+                    savedPath = sourcePath;
+                    CommitReplace(tempPath, sourcePath);
+                }
+
+                message = "旧版格式无法直接解锁，已从同名 .bak 备份恢复 " +
+                          (replaceOriginal ? "并覆盖原文件" : "-> " + savedPath);
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 
