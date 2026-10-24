@@ -33,7 +33,14 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      sed -n '2,12p' "$0"
+      cat <<'USAGE'
+用法：
+  ./release.sh 1.2.0                    完整发布
+  ./release.sh 1.2.0 --notes-file n.md  使用自定义发布说明
+  ./release.sh 1.2.0 --dry-run          只演练，不提交/不推送/不发布
+
+依赖：git、dotnet SDK、gh（GitHub CLI 且已 gh auth login）
+USAGE
       exit 0
       ;;
     -*)
