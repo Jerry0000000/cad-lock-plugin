@@ -1,0 +1,5 @@
+# 统一换行：shell 脚本必须 LF，否则在 Windows 上会因 CRLF 无法执行
+*.sh text eol=lf
+
+# 二进制发布产物不做换行转换
+*.dll binary
