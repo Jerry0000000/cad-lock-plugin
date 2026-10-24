@@ -147,7 +147,7 @@ namespace CadLockPlugin
                         return;
                     }
 
-                    if (options.DisableCopy || options.DisableDelete)
+                    if (options.DisableCopy || options.DisableDelete || options.DisableModify)
                     {
                         CadLockEvents.RegisterProtectedIds(db, lockedBlockIds);
                     }

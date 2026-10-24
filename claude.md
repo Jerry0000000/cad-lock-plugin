@@ -37,7 +37,7 @@
 
 1. **“加密”本质是匿名块封装**：把图元克隆进多层嵌套的匿名块（`*U`），设置 `Explodable = false`，再把块参照放到专用图层 `ACAD_LOCK_LAYER`。几何没有被加密，只是无法通过 EXPLODE 取出。
 2. **本项目是可逆的**：`UNLOCK` / `BATUNLOCK` 会逐层拆回普通图元。旧版说明里的“不可逆”不再适用（Office 的“公式转值”除外，那一步确实不可逆）。
-3. **只有“不可炸开”是文件级硬约束**；“不可选中、不可打印、不可复制、不可删除”都是**装有本插件时的运行期防护**，防护选项写在图纸 NOD 中，重新打开会自动恢复。
+3. **只有“不可炸开”是文件级硬约束**；“不可选中、不可更改、不可打印、不可复制、不可删除”都是**装有本插件时的运行期防护**，防护选项写在图纸 NOD 中，重新打开会自动恢复。
 4. 一套源码通过 `#if ZWCAD` 编译出两个平台版本，**禁止复制出第二份业务代码**。
 5. **兼容旧版 `lockdwg.dll` 图纸**：识别 `*ACADLOCKLAYER` / `ACADLOCKLAYER` 等旧图层；旧 `_lock.dwg` 只剩空 MINSERT 时，批量解锁会尝试用同名 `.bak` 备份恢复（详见 7.5）。
 
@@ -150,9 +150,9 @@ dotnet build CadLockPlugin.sln -c Release \
 
 | 文件 | 职责 | 关键入口 | 修改注意 |
 | :--- | :--- | :--- | :--- |
-| `src/CadLockOptions.cs` | 参数模型 | `SplitCount` / `RepeatCount` / 四个防护开关 / `ReplaceOriginalFile` | 默认值：`SplitCount=10`、`RepeatCount=10`、`DisableSelect=true`，其余 `false`；UI 的默认分块数是 100，不要混淆 |
+| `src/CadLockOptions.cs` | 参数模型 | `SplitCount` / `RepeatCount` / 五个防护开关 / `ReplaceOriginalFile` | 默认值：`SplitCount=10`、`RepeatCount=10`、`DisableSelect=true`，其余 `false`；UI 的默认分块数是 100，不要混淆 |
 | `src/CadLockEngine.cs` | 领域算法：加密、解锁、NOD、批量 DWG、旧格式恢复 | `LockEntities`、`UnlockAllSpaces`、`FindLockLayerIds`、`BatchLockFiles`、`BatchUnlockFiles`、`TryRecoverLegacyBackup` | 不依赖 UI/Document，可在侧数据库中运行；所有常量（图层名、字典键）在此 |
-| `src/CadLockEvents.cs` | 运行期防护：DeepClone、ObjectErased、图层守护、持久化恢复 | `Install`、`HookEvents`、`UnhookEvents`、`ApplyPersistedProtection`、`FlushPendingProtection` | 延迟恢复机制不能简化成同步回调；状态列表见 `States` |
+| `src/CadLockEvents.cs` | 运行期防护：DeepClone、ObjectErased、修改还原、图层守护、持久化恢复 | `Install`、`HookEvents`、`UnhookEvents`、`ApplyPersistedProtection`、`FlushPendingProtection` | 延迟恢复机制不能简化成同步回调；状态列表见 `States` |
 | `src/CadLockCommands.cs` | CAD 命令与扩展入口 | `LOCK`、`BATLOCK`、`UNLOCK`、`BATUNLOCK`、`STOPEX`、`CadLockApp` | 命令层负责文档锁、选择、控制台输出；不要在这里写算法 |
 | `src/OfficeLockEngine.cs` | Excel/Word COM 批量保护 | `BatchProtectFiles`、`BatchUnprotectFiles` | 依赖本机 Office；固定口令 `CadLock@2024`；公式转值不可逆 |
 | `src/UI/LockForm.cs` | 配置面板 | `ActionType`、`Options`、`UserAction` | 纯 WinForms；`ExecuteAction` 负责解析输入并关闭窗口 |
@@ -175,7 +175,7 @@ dotnet build CadLockPlugin.sln -c Release \
 4. 选择对象模式下用 `Editor.GetSelection` 取选择集；全图模式取 `db.CurrentSpaceId` 里的全部对象。
 5. 统一走 `FilterLockableEntities`，剔除视口、已加密图层、锁定图层、无效对象。
 6. 在事务中调用 `CadLockEngine.LockEntities(db, tr, targetEntities, options)`，返回顶层加密块 ID。
-7. 若启用了“不可复制/不可删除”，把顶层块 ID 注册到 `CadLockEvents.RegisterProtectedIds`，再调用 `HookEvents(db, doc, options)` 挂载钩子。
+7. 若启用了“不可复制/不可删除/不可更改”，把顶层块 ID 注册到 `CadLockEvents.RegisterProtectedIds`，再调用 `HookEvents(db, doc, options)` 挂载钩子。
 8. 打印完成提示；**不会自动保存**，必须提示用户 `Ctrl+S`。加密前应备份原图。
 
 > 选择对象时，如果图元位于锁定图层，会被静默排除；这是为了保证后续 `Erase` 能成功。控制台提示的是**待处理图元数量**，不是最终块数量；最终顶层块数量以 `LockEntities` 返回值为准。
@@ -274,6 +274,9 @@ Database.NamedObjectsDictionary
 | `Db` / `Doc` | 目标数据库与文档 |
 | `ProtectedIds` | 受保护的顶层加密块 ID（内存集合） |
 | `PendingUnerase` | 已提交删除、等待命令结束/空闲恢复的对象 |
+| `ModifySnapshots` | 加密块被修改前的原始位置/角度/比例/图层（“不可更改”快照） |
+| `PendingModifyRestore` | 已被修改、等待命令结束/空闲还原的加密块 |
+| `RestoringModifies` | 还原执行中标记，屏蔽还原自身触发的事件 |
 | `Options` | 该图纸的防护选项（来自 NOD） |
 | `LayerTampered` | 加密图层被解锁/改为可打印，等待恢复 |
 | `*Handler` | 各事件处理器，便于 `UnhookEvents` 精确注销 |
@@ -284,9 +287,9 @@ Database.NamedObjectsDictionary
 | :--- | :--- | :--- |
 | `Database.BeginDeepClone` | `DisableCopy=true` | 把受保护 ID 从 `IdMapping` 中删除，阻止 COPYCLIP / WBLOCK / 跨图拖放 |
 | `Database.ObjectErased` | `DisableDelete=true` | 只登记到 `PendingUnerase`，**不在回调内修改对象** |
-| `Database.ObjectModified` | `DisableSelect` 或 `DisablePlot` | 检查加密图层是否被解锁/改成可打印，标记 `LayerTampered` |
-| `Database.ObjectOpenedForModify` | 同上 | 目前只做类型/图层名校验，没有实际动作，是预留钩子 |
-| `Document.CommandEnded` | 需要恢复删除或图层时 | 执行 `RestorePendingErases`，再 `FlushPendingProtection` |
+| `Database.ObjectModified` | `DisableSelect` / `DisablePlot` / `DisableModify` | 检查加密图层是否被解锁/改成可打印（`LayerTampered`）；检查加密块是否被移动/旋转/缩放（`PendingModifyRestore`） |
+| `Database.ObjectOpenedForModify` | `DisableModify` | 在修改发生前把块的插入点/角度/比例/图层记入 `ModifySnapshots` |
+| `Document.CommandEnded` | 需要恢复删除、图层或修改时 | 执行 `RestorePendingErases`，再 `FlushPendingProtection` |
 | `Application.Idle` | 安装过任意钩子后 | `FlushPendingProtection`，覆盖 LISP 嵌套命令等不触发 `CommandEnded` 的场景 |
 | `DocumentManager.DocumentActivated` | 插件加载后 | 对激活文档调用 `ApplyPersistedProtection` |
 
@@ -295,6 +298,7 @@ Database.NamedObjectsDictionary
 - `ObjectErased` 回调中对象已处于擦除状态，直接恢复会抛 `eWasErased`；必须等原命令事务结束。
 - `CommandEnded` 覆盖普通交互命令；`Application.Idle` 覆盖 LISP 的 `(command ...)` 嵌套调用，也供 `accoreconsole` 等无 UI 环境手动调用 `FlushPendingProtection`。
 - 图层恢复只在图纸仍有 `ACAD_LOCK` 标记时执行，避免把用户合法解锁的图纸重新锁死。
+- “不可更改”的还原顺序是：先还原加密块，再锁回图层；否则图层一旦锁上，再以写方式打开块参照可能被 CAD 拒绝。还原期间用 `RestoringModifies` 屏蔽自身触发的事件。
 - `ApplyPersistedProtection` 打开图纸时：
   1. 读取标记与选项；
   2. 按选项同步加密图层的 `IsLocked` / `IsPlottable`；
@@ -357,7 +361,7 @@ Database.NamedObjectsDictionary
 ### 8. 界面（`LockForm`）
 
 - `ActionType`：`None`、`SelectObjects`、`EntireDrawing`、`BatchFiles`、`UnlockDrawing`、`BatchUnlock`。
-- 默认值：分块数 `100`、加密次数 `10`；`不可炸开` 强制勾选且禁用；`不可选中` 默认勾选；`不可打印/不可复制/不可删除` 默认不勾选；`直接替换原文件` 默认不勾选。
+- 默认值：分块数 `100`、加密次数 `10`；`不可炸开` 强制勾选且禁用；`不可选中` 默认勾选；`不可打印/不可复制/不可删除/不可更改` 默认不勾选；`直接替换原文件` 默认不勾选。
 - 输入解析失败或小于 1 时回退 100 / 10（`ExecuteAction`）。
 - `直接替换原文件` 只对批量加密/批量解锁生效；当前图纸加密/解锁忽略该开关。
 - 点击任一操作按钮都会设置 `UserAction`、`DialogResult=OK` 并关闭窗口；`LOCK` 命令据此分流。
@@ -399,6 +403,7 @@ dotnet build tests/CadLockSmoke/CadLockSmoke.csproj -c Release
 | `SMOKE11` | 生成“图层已被手动解锁”的加密图纸 `guard_unlocked.dwg` | `SMOKE1` |
 | `SMOKE12` | 打开 `guard_unlocked.dwg` 后验证标记、选项、图层自动锁回 | `SMOKE11` + 手动打开该文件 |
 | `SMOKE13` | 手动解锁图层后调用 `FlushPendingProtection` 验证恢复 | `SMOKE12` |
+| `SMOKE14` | 不可更改：程序化移动/旋转/缩放加密块，`FlushPendingProtection` 后验证插入点/角度/比例还原 | 无（独立新建加密块） |
 | `SMOKE9` | 打印 PASS/FAIL 汇总 | 最后执行 |
 
 注意：
@@ -603,6 +608,7 @@ dotnet build tests/CadLockSmoke/CadLockSmoke.csproj -c Release
 | 保护选项持久化 | 仅加密标记 | NOD 中额外保存 `OPTIONS`，重开自动恢复图层与钩子 |
 | 删除恢复 | 回调内直接恢复（易抛 `eWasErased`） | 延迟到 `CommandEnded` / `Idle`，用 `openErased: true` 恢复 |
 | 图层守护 | 无 | 检测手动解锁/改可打印，自动锁回（图纸仍有标记时） |
+| 防修改 | 无 | `ObjectOpenedForModify` 记录快照，命令结束/空闲时还原插入点、角度、比例与图层 |
 | 批量对象 | 仅 DWG | DWG + Excel + Word（COM） |
 | 平台 | AutoCAD | AutoCAD + 中望CAD，共享源码 |
 | 图层名 | `ACADLOCKLAYER` / `ACADLOCKLAYERM` | `ACAD_LOCK_LAYER`（已发布格式，勿改） |

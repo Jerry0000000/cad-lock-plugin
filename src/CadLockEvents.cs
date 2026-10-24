@@ -4,9 +4,11 @@ using System.Collections.Generic;
 #if ZWCAD
 using ZwSoft.ZwCAD.ApplicationServices;
 using ZwSoft.ZwCAD.DatabaseServices;
+using ZwSoft.ZwCAD.Geometry;
 #else
 using Autodesk.AutoCAD.ApplicationServices;
 using Autodesk.AutoCAD.DatabaseServices;
+using Autodesk.AutoCAD.Geometry;
 #endif
 
 namespace CadLockPlugin
@@ -31,6 +33,15 @@ namespace CadLockPlugin
 
             /// <summary>已提交删除、等待命令结束后恢复的对象</summary>
             public readonly HashSet<ObjectId> PendingUnerase = new HashSet<ObjectId>();
+
+            /// <summary>加密块被修改前的原始位置/角度/比例（不可更改）</summary>
+            public readonly Dictionary<ObjectId, ModifySnapshot> ModifySnapshots = new Dictionary<ObjectId, ModifySnapshot>();
+
+            /// <summary>已被修改、等待命令结束后还原的加密对象</summary>
+            public readonly HashSet<ObjectId> PendingModifyRestore = new HashSet<ObjectId>();
+
+            /// <summary>正在执行还原，忽略还原本身触发的修改事件</summary>
+            public bool RestoringModifies;
 
             public CadLockOptions? Options;
 
@@ -89,8 +100,9 @@ namespace CadLockPlugin
                     db.ObjectErased += state.ErasedHandler;
                 }
 
-                // 图层锁定是「不可选中」的唯一实现手段，必须防止用户直接把图层解锁
-                if ((options.DisableSelect || options.DisablePlot) && state.ModifiedHandler == null)
+                // 图层锁定是「不可选中」的唯一实现手段，必须防止用户直接把图层解锁；
+                // “不可更改”也复用这组事件来记录并还原对加密块的修改
+                if ((options.DisableSelect || options.DisablePlot || options.DisableModify) && state.ModifiedHandler == null)
                 {
                     state.ModifiedHandler = (s, e) => OnObjectModified(state, e);
                     state.OpenedHandler = (s, e) => OnObjectOpenedForModify(state, e);
@@ -100,7 +112,7 @@ namespace CadLockPlugin
 
                 // 删除恢复与图层恢复都依赖「命令结束」这个时机
                 if (doc != null && state.CommandEndedHandler == null &&
-                    (options.DisableDelete || options.DisableSelect || options.DisablePlot))
+                    (options.DisableDelete || options.DisableSelect || options.DisablePlot || options.DisableModify))
                 {
                     var capturedDoc = doc;
                     state.CommandEndedHandler = (s, e) => OnCommandEnded(state, capturedDoc);
@@ -214,6 +226,9 @@ namespace CadLockPlugin
             lock (SyncRoot)
             {
                 state.PendingUnerase.Clear();
+                state.PendingModifyRestore.Clear();
+                state.ModifySnapshots.Clear();
+                state.RestoringModifies = false;
                 state.LayerTampered = false;
                 state.Options = null;
             }
@@ -444,12 +459,27 @@ namespace CadLockPlugin
             }
         }
 
+        /// <summary>
+        /// 对象即将被修改时先记住原始位置/角度/比例，供“不可更改”还原。
+        /// 此时修改尚未发生，读到的就是修改前的状态。
+        /// </summary>
         private static void OnObjectOpenedForModify(HookState state, ObjectEventArgs e)
         {
             try
             {
-                if (!(e.DBObject is LayerTableRecord layer)) return;
-                if (!CadLockEngine.IsLockLayerName(layer.Name)) return;
+                var options = state.Options;
+                if (options == null || !options.DisableModify) return;
+                if (!(e.DBObject is BlockReference br)) return;
+
+                var id = br.ObjectId;
+                if (id.IsNull) return;
+
+                lock (SyncRoot)
+                {
+                    if (!state.ProtectedIds.Contains(id)) return;
+                    if (state.ModifySnapshots.ContainsKey(id)) return;
+                    state.ModifySnapshots[id] = ModifySnapshot.Capture(br);
+                }
             }
             catch
             {
@@ -458,25 +488,43 @@ namespace CadLockPlugin
         }
 
         /// <summary>
-        /// 记录加密图层被解锁/改成可打印，真正的恢复放到命令结束或空闲时执行
+        /// 图层被解锁/改成可打印、加密块被移动/旋转/缩放时只做登记，
+        /// 真正的恢复放到命令结束或空闲时执行（回调内不能安全写入）
         /// </summary>
         private static void OnObjectModified(HookState state, ObjectEventArgs e)
         {
             try
             {
-                if (!(e.DBObject is LayerTableRecord layer)) return;
-                if (!CadLockEngine.IsLockLayerName(layer.Name)) return;
-
                 var options = state.Options;
                 if (options == null) return;
-                if (!NeedsLayerGuard(options)) return;
 
-                if (layer.IsLocked != options.DisableSelect || layer.IsPlottable != !options.DisablePlot)
+                if (e.DBObject is LayerTableRecord layer &&
+                    CadLockEngine.IsLockLayerName(layer.Name) &&
+                    NeedsLayerGuard(options))
                 {
-                    lock (SyncRoot)
+                    if (layer.IsLocked != options.DisableSelect || layer.IsPlottable != !options.DisablePlot)
                     {
-                        state.LayerTampered = true;
+                        lock (SyncRoot)
+                        {
+                            state.LayerTampered = true;
+                        }
                     }
+                    return;
+                }
+
+                if (!options.DisableModify) return;
+                if (!(e.DBObject is BlockReference br)) return;
+
+                var id = br.ObjectId;
+                if (id.IsNull) return;
+
+                lock (SyncRoot)
+                {
+                    if (state.RestoringModifies) return;
+                    if (!state.ProtectedIds.Contains(id)) return;
+                    if (!state.ModifySnapshots.TryGetValue(id, out var snapshot)) return;
+                    if (snapshot.Matches(br)) return;
+                    state.PendingModifyRestore.Add(id);
                 }
             }
             catch
@@ -523,12 +571,27 @@ namespace CadLockPlugin
             try
             {
                 List<HookState> targets = new List<HookState>();
+                List<HookState> pendingErase = new List<HookState>();
+                List<HookState> pendingModify = new List<HookState>();
+
                 lock (SyncRoot)
                 {
                     if (States.Count == 0) return;
                     foreach (var state in States)
                     {
                         if (state.LayerTampered && state.Doc != null) targets.Add(state);
+                        if (state.PendingUnerase.Count > 0 && state.Doc != null) pendingErase.Add(state);
+                        if (state.PendingModifyRestore.Count > 0 && state.Doc != null) pendingModify.Add(state);
+                    }
+                }
+
+                // 先还原被移动/旋转/缩放的加密块，再锁回图层：
+                // 图层一旦锁上，再以写方式打开块参照可能被 CAD 拒绝
+                foreach (var state in pendingModify)
+                {
+                    if (state.Doc != null)
+                    {
+                        RestorePendingModifies(state, state.Doc);
                     }
                 }
 
@@ -538,15 +601,6 @@ namespace CadLockPlugin
                 }
 
                 // 删除恢复同样要走延迟路径：accoreconsole 等环境不会触发 CommandEnded
-                List<HookState> pendingErase = new List<HookState>();
-                lock (SyncRoot)
-                {
-                    foreach (var state in States)
-                    {
-                        if (state.PendingUnerase.Count > 0 && state.Doc != null) pendingErase.Add(state);
-                    }
-                }
-
                 foreach (var state in pendingErase)
                 {
                     if (state.Doc != null)
@@ -630,6 +684,155 @@ namespace CadLockPlugin
                 {
                     // 编辑器不可用时忽略提示
                 }
+            }
+        }
+
+        /// <summary>
+        /// 命令结束后把被移动/旋转/缩放/改图层的加密块还原到修改前的状态
+        /// </summary>
+        private static void RestorePendingModifies(HookState state, Document doc)
+        {
+            ObjectId[] pending;
+            lock (SyncRoot)
+            {
+                if (state.PendingModifyRestore.Count == 0) return;
+                pending = new ObjectId[state.PendingModifyRestore.Count];
+                state.PendingModifyRestore.CopyTo(pending);
+                state.PendingModifyRestore.Clear();
+                state.RestoringModifies = true;
+            }
+
+            var db = state.Db;
+            int restored = 0;
+
+            try
+            {
+                using (doc.LockDocument())
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    foreach (var id in pending)
+                    {
+                        try
+                        {
+                            if (id.IsNull) continue;
+
+                            ModifySnapshot? snapshot = null;
+                            lock (SyncRoot)
+                            {
+                                if (state.ModifySnapshots.TryGetValue(id, out var found))
+                                {
+                                    snapshot = found;
+                                }
+                            }
+                            if (snapshot == null) continue;
+
+                            var br = tr.GetObject(id, OpenMode.ForWrite, false) as BlockReference;
+                            if (br == null || br.IsErased) continue;
+                            if (snapshot.Matches(br)) continue;
+
+                            snapshot.Restore(br);
+                            restored++;
+                        }
+                        catch
+                        {
+                            // 单个对象还原失败不影响其余对象
+                        }
+                    }
+
+                    if (restored > 0) tr.Commit(); else tr.Abort();
+                }
+            }
+            finally
+            {
+                lock (SyncRoot)
+                {
+                    state.RestoringModifies = false;
+                }
+            }
+
+            if (restored > 0)
+            {
+                try
+                {
+                    doc.Editor?.WriteMessage($"\n[保护] 检测到修改加密对象，已自动还原 {restored} 个对象。\n");
+                }
+                catch
+                {
+                    // 编辑器不可用时忽略提示
+                }
+            }
+        }
+
+        /// <summary>
+        /// 加密块修改前的原始位置/角度/比例/图层，用于自动还原
+        /// </summary>
+        private sealed class ModifySnapshot
+        {
+            private Point3d _position;
+            private double _rotation;
+            private Scale3d _scale;
+            private Vector3d _normal;
+            private ObjectId _layerId;
+
+            public static ModifySnapshot Capture(BlockReference br)
+            {
+                return new ModifySnapshot
+                {
+                    _position = br.Position,
+                    _rotation = br.Rotation,
+                    _scale = br.ScaleFactors,
+                    _normal = br.Normal,
+                    _layerId = br.LayerId
+                };
+            }
+
+            public bool Matches(BlockReference br)
+            {
+                return SamePoint(_position, br.Position)
+                       && Near(_rotation, br.Rotation)
+                       && SameScale(_scale, br.ScaleFactors)
+                       && SameVector(_normal, br.Normal)
+                       && _layerId == br.LayerId;
+            }
+
+            public void Restore(BlockReference br)
+            {
+                if (!SamePoint(_position, br.Position)) br.Position = _position;
+                if (!Near(_rotation, br.Rotation)) br.Rotation = _rotation;
+                if (!SameScale(_scale, br.ScaleFactors)) br.ScaleFactors = _scale;
+                if (!SameVector(_normal, br.Normal)) br.Normal = _normal;
+
+                if (_layerId.IsValid && br.LayerId != _layerId)
+                {
+                    try
+                    {
+                        br.LayerId = _layerId;
+                    }
+                    catch
+                    {
+                        // 原图层已被删除时保留当前图层
+                    }
+                }
+            }
+
+            private static bool Near(double a, double b)
+            {
+                return Math.Abs(a - b) < 1e-9;
+            }
+
+            private static bool SamePoint(Point3d a, Point3d b)
+            {
+                return Near(a.X, b.X) && Near(a.Y, b.Y) && Near(a.Z, b.Z);
+            }
+
+            private static bool SameVector(Vector3d a, Vector3d b)
+            {
+                return Near(a.X, b.X) && Near(a.Y, b.Y) && Near(a.Z, b.Z);
+            }
+
+            private static bool SameScale(Scale3d a, Scale3d b)
+            {
+                return Near(a.X, b.X) && Near(a.Y, b.Y) && Near(a.Z, b.Z);
             }
         }
 

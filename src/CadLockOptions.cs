@@ -22,6 +22,12 @@ namespace CadLockPlugin
         public bool DisableSelect { get; set; } = true;
 
         /// <summary>
+        /// 不可更改 (拦截移动/旋转/缩放/拉伸等修改，命令结束后自动还原原始位置与属性)
+        /// 与“不可选中”互补：即使加密图层被临时解锁，对加密块的修改也会被还原
+        /// </summary>
+        public bool DisableModify { get; set; } = false;
+
+        /// <summary>
         /// 不可打印 (设置图层为不打印)
         /// </summary>
         public bool DisablePlot { get; set; } = false;

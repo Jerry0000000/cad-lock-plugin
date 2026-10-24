@@ -398,6 +398,7 @@ namespace CadLockSmoke
             var options = ProbeOptions(true);
             options.DisableSelect = true;
             options.DisableDelete = true;
+            options.DisableModify = true;
 
             BatchLockResult r = BatchLockResult.Failed;
             CadLockEngine.BatchLockFiles(new[] { g }, options, (f, res, m) => r = res);
@@ -411,8 +412,8 @@ namespace CadLockSmoke
                 using (var tr = db.TransactionManager.StartTransaction())
                 {
                     var saved = CadLockEngine.LoadProtectionOptions(db, tr);
-                    TestLog.Check(saved != null && saved.DisableSelect && saved.DisableDelete,
-                        "保护选项已随图纸保存");
+                    TestLog.Check(saved != null && saved.DisableSelect && saved.DisableDelete && saved.DisableModify,
+                        "保护选项已随图纸保存（含不可更改）");
 
                     ObjectId layerId = CadLockEngine.FindLockLayerId(db, tr);
                     var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite);
@@ -465,6 +466,85 @@ namespace CadLockSmoke
                 var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForRead);
                 TestLog.Check(layer.IsLocked, "解锁命令执行后图层被自动恢复锁定，实际 IsLocked=" + layer.IsLocked);
                 tr.Commit();
+            }
+        }
+
+        [CommandMethod("SMOKE14")]
+        public void Smoke14()
+        {
+            var doc = Application.DocumentManager.MdiActiveDocument;
+            var db = doc.Database;
+
+            using (doc.LockDocument())
+            {
+                var options = new CadLockOptions
+                {
+                    SplitCount = 1,
+                    RepeatCount = 1,
+                    DisableSelect = false,
+                    DisableModify = true
+                };
+
+                ObjectId blockId;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var ms = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
+                    var line = new Line(new Point3d(0, 0, 0), new Point3d(10, 0, 0));
+                    var lineId = ms.AppendEntity(line);
+                    tr.AddNewlyCreatedDBObject(line, true);
+
+                    var ids = CadLockEngine.LockEntities(db, tr, new[] { lineId }, options);
+                    if (ids.Count == 0)
+                    {
+                        tr.Abort();
+                        TestLog.Check(false, "不可更改：未能生成加密块");
+                        return;
+                    }
+                    blockId = ids[0];
+                    tr.Commit();
+                }
+
+                CadLockEvents.RegisterProtectedIds(db, new[] { blockId });
+                CadLockEvents.HookEvents(db, doc, options);
+
+                Point3d originalPosition;
+                double originalRotation;
+                Scale3d originalScale;
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var br = (BlockReference)tr.GetObject(blockId, OpenMode.ForRead);
+                    originalPosition = br.Position;
+                    originalRotation = br.Rotation;
+                    originalScale = br.ScaleFactors;
+                    tr.Commit();
+                }
+
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var br = (BlockReference)tr.GetObject(blockId, OpenMode.ForWrite);
+                    br.Position = originalPosition + new Vector3d(100, 50, 0);
+                    br.Rotation = originalRotation + Math.PI / 2;
+                    br.ScaleFactors = new Scale3d(2, 2, 2);
+                    tr.Commit();
+                }
+
+                CadLockEvents.FlushPendingProtection();
+
+                using (var tr = db.TransactionManager.StartTransaction())
+                {
+                    var br = (BlockReference)tr.GetObject(blockId, OpenMode.ForRead);
+                    TestLog.Check(br.Position.IsEqualTo(originalPosition, new Tolerance(1e-6, 1e-6)),
+                        "不可更改：插入点已还原");
+                    TestLog.Check(Math.Abs(br.Rotation - originalRotation) < 1e-6,
+                        "不可更改：旋转角已还原");
+                    TestLog.Check(Math.Abs(br.ScaleFactors.X - originalScale.X) < 1e-6 &&
+                                  Math.Abs(br.ScaleFactors.Y - originalScale.Y) < 1e-6 &&
+                                  Math.Abs(br.ScaleFactors.Z - originalScale.Z) < 1e-6,
+                        "不可更改：比例已还原");
+                    tr.Commit();
+                }
+
+                CadLockEvents.UnhookEvents(db);
             }
         }
 

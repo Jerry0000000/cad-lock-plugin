@@ -26,6 +26,7 @@ namespace CadLockPlugin.UI
         private TextBox txtRepeat = null!;
 
         private CheckBox chkSelect = null!;
+        private CheckBox chkModify = null!;
         private CheckBox chkPlot = null!;
         private CheckBox chkCopy = null!;
         private CheckBox chkDelete = null!;
@@ -127,7 +128,7 @@ namespace CadLockPlugin.UI
 
             header.Controls.Add(new Label
             {
-                Text = "防炸开 · 防复制 · 防打印 · 防删除 · 批量处理 · 一键解锁还原",
+                Text = "防炸开 · 防修改 · 防复制 · 防打印 · 防删除 · 批量处理 · 一键解锁还原",
                 ForeColor = Color.FromArgb(176, 195, 222),
                 Font = UiFont(8.5F),
                 AutoSize = true,
@@ -216,7 +217,7 @@ namespace CadLockPlugin.UI
             var grp = new GroupBox
             {
                 Text = "  安全保护选项（鼠标悬停可查看说明）  ",
-                Size = new Size(ContentWidth, 76),
+                Size = new Size(ContentWidth, 104),
                 BackColor = Color.White,
                 ForeColor = Color.FromArgb(60, 70, 85),
                 Margin = new Padding(0, 0, 0, 10)
@@ -255,6 +256,17 @@ namespace CadLockPlugin.UI
                 "锁状态随图纸保存，没装本插件的电脑上同样选不中。\n" +
                 "注意：图层锁定不屏蔽对象捕捉；被手动解锁时本插件会自动锁回。");
 
+            chkModify = new CheckBox
+            {
+                Text = "不可更改",
+                AutoSize = true,
+                Margin = new Padding(4, 6, 18, 6)
+            };
+            toolTip.SetToolTip(chkModify,
+                "即使加密图层被临时解锁，移动/旋转/缩放/拉伸或修改加密块图层时，\n" +
+                "本插件会在命令结束后自动还原位置、角度、比例与图层。\n" +
+                "注意：本项是运行期防护，需加载本插件；默认不勾选。");
+
             chkPlot = new CheckBox
             {
                 Text = "不可打印",
@@ -281,6 +293,7 @@ namespace CadLockPlugin.UI
 
             flow.Controls.Add(chkExplode);
             flow.Controls.Add(chkSelect);
+            flow.Controls.Add(chkModify);
             flow.Controls.Add(chkPlot);
             flow.Controls.Add(chkCopy);
             flow.Controls.Add(chkDelete);
@@ -489,6 +502,7 @@ namespace CadLockPlugin.UI
                 SplitCount = splitVal,
                 RepeatCount = repeatVal,
                 DisableSelect = chkSelect.Checked,
+                DisableModify = chkModify.Checked,
                 DisablePlot = chkPlot.Checked,
                 DisableCopy = chkCopy.Checked,
                 DisableDelete = chkDelete.Checked,

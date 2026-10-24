@@ -94,7 +94,9 @@ namespace CadLockPlugin
                 new TypedValue((int)DxfCode.Int16, options.DisableCopy ? 1 : 0),
                 new TypedValue((int)DxfCode.Int16, options.DisableDelete ? 1 : 0),
                 new TypedValue((int)DxfCode.Int32, options.SplitCount),
-                new TypedValue((int)DxfCode.Int32, options.RepeatCount)
+                new TypedValue((int)DxfCode.Int32, options.RepeatCount),
+                // 追加在末尾：旧版本插件只读前 6 项，不会把新增项误当成分块数量
+                new TypedValue((int)DxfCode.Int16, options.DisableModify ? 1 : 0)
             };
 
             var xrec = new Xrecord { Data = new ResultBuffer(data) };
@@ -125,6 +127,7 @@ namespace CadLockPlugin
                 DisablePlot = ToInt(values[1]) != 0,
                 DisableCopy = ToInt(values[2]) != 0,
                 DisableDelete = ToInt(values[3]) != 0,
+                DisableModify = values.Length > 6 && ToInt(values[6]) != 0,
                 SplitCount = values.Length > 4 ? ToInt(values[4]) : 1,
                 RepeatCount = values.Length > 5 ? ToInt(values[5]) : 1
             };
