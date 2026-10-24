@@ -17,6 +17,12 @@ namespace CadLockPlugin
         public const string LockDictionaryKey = "ACAD_LOCK";
         public const string LockLayerName = "ACAD_LOCK_LAYER";
 
+        /// <summary>加密时使用的保护选项，随图纸保存，重新打开后据此恢复防护</summary>
+        public const string LockOptionsKey = "OPTIONS";
+
+        private const string LockSuffix = "_lock";
+        private const string UnlockSuffix = "_unlock";
+
         /// <summary>
         /// 检查图纸是否已经被加密锁定
         /// </summary>
@@ -41,7 +47,132 @@ namespace CadLockPlugin
         }
 
         /// <summary>
-        /// 获取或创建加密专用图层 (可控是否打印、是否锁定/不可捕捉)
+        /// 移除加密标记，使图纸可以重新加密
+        /// </summary>
+        public static void RemoveLockMark(Database db, Transaction tr)
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead);
+            if (!nod.Contains(LockDictionaryKey)) return;
+
+            ObjectId entryId = (ObjectId)nod[LockDictionaryKey];
+            nod.UpgradeOpen();
+            nod.Remove(LockDictionaryKey);
+
+            var entry = tr.GetObject(entryId, OpenMode.ForWrite, false);
+            entry?.Erase();
+        }
+
+        /// <summary>
+        /// 把保护选项写进图纸的 ACAD_LOCK 字典；重新打开图纸时据此恢复图层状态与拦截钩子
+        /// </summary>
+        public static void SaveProtectionOptions(Database db, Transaction tr, CadLockOptions options)
+        {
+            if (options == null) return;
+
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead, false);
+            if (nod == null || !nod.Contains(LockDictionaryKey)) return;
+
+            var dict = tr.GetObject((ObjectId)nod[LockDictionaryKey], OpenMode.ForWrite, false) as DBDictionary;
+            if (dict == null) return;
+
+            var data = new TypedValue[]
+            {
+                new TypedValue((int)DxfCode.Int16, options.DisableSelect ? 1 : 0),
+                new TypedValue((int)DxfCode.Int16, options.DisablePlot ? 1 : 0),
+                new TypedValue((int)DxfCode.Int16, options.DisableCopy ? 1 : 0),
+                new TypedValue((int)DxfCode.Int16, options.DisableDelete ? 1 : 0),
+                new TypedValue((int)DxfCode.Int32, options.SplitCount),
+                new TypedValue((int)DxfCode.Int32, options.RepeatCount)
+            };
+
+            var xrec = new Xrecord { Data = new ResultBuffer(data) };
+            dict.SetAt(LockOptionsKey, xrec);
+            tr.AddNewlyCreatedDBObject(xrec, true);
+        }
+
+        /// <summary>
+        /// 读取图纸中保存的保护选项，未加密或无记录时返回 null
+        /// </summary>
+        public static CadLockOptions? LoadProtectionOptions(Database db, Transaction tr)
+        {
+            var nod = (DBDictionary)tr.GetObject(db.NamedObjectsDictionaryId, OpenMode.ForRead, false);
+            if (nod == null || !nod.Contains(LockDictionaryKey)) return null;
+
+            var dict = tr.GetObject((ObjectId)nod[LockDictionaryKey], OpenMode.ForRead, false) as DBDictionary;
+            if (dict == null || !dict.Contains(LockOptionsKey)) return null;
+
+            var xrec = tr.GetObject((ObjectId)dict[LockOptionsKey], OpenMode.ForRead, false) as Xrecord;
+            if (xrec == null || xrec.Data == null) return null;
+
+            TypedValue[] values = xrec.Data.AsArray();
+            if (values == null || values.Length < 4) return null;
+
+            return new CadLockOptions
+            {
+                DisableSelect = ToInt(values[0]) != 0,
+                DisablePlot = ToInt(values[1]) != 0,
+                DisableCopy = ToInt(values[2]) != 0,
+                DisableDelete = ToInt(values[3]) != 0,
+                SplitCount = values.Length > 4 ? ToInt(values[4]) : 1,
+                RepeatCount = values.Length > 5 ? ToInt(values[5]) : 1
+            };
+        }
+
+        private static int ToInt(TypedValue value)
+        {
+            try
+            {
+                return Convert.ToInt32(value.Value);
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// 取出图纸中所有位于加密图层上的块参照（即受保护的顶层对象）
+        /// </summary>
+        public static List<ObjectId> GetLockedBlockIds(Database db, Transaction tr)
+        {
+            var result = new List<ObjectId>();
+            ObjectId lockLayerId = FindLockLayerId(db, tr);
+            if (lockLayerId.IsNull) return result;
+
+            foreach (var spaceId in GetAllSpaceIds(db, tr))
+            {
+                foreach (var id in GetSpaceEntityIds(tr, spaceId))
+                {
+                    try
+                    {
+                        var br = tr.GetObject(id, OpenMode.ForRead, false) as BlockReference;
+                        if (br != null && br.LayerId == lockLayerId)
+                        {
+                            result.Add(id);
+                        }
+                    }
+                    catch
+                    {
+                        // 单个对象异常跳过
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 查找加密专用图层
+        /// </summary>
+        public static ObjectId FindLockLayerId(Database db, Transaction tr)
+        {
+            var lt = (LayerTable)tr.GetObject(db.LayerTableId, OpenMode.ForRead);
+            return lt.Has(LockLayerName) ? lt[LockLayerName] : ObjectId.Null;
+        }
+
+        /// <summary>
+        /// 获取或创建加密专用图层 (可控是否打印、是否锁定/不可选中)
+        /// 图层的 IsLocked 只影响选中与编辑，不影响对象捕捉
         /// </summary>
         public static ObjectId GetOrCreateLockLayer(Database db, Transaction tr, CadLockOptions options)
         {
@@ -50,14 +181,9 @@ namespace CadLockPlugin
             {
                 ObjectId layerId = lt[LockLayerName];
                 var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite);
-                if (options.DisablePlot)
-                {
-                    layer.IsPlottable = false;
-                }
-                if (options.DisableSnap)
-                {
-                    layer.IsLocked = true;
-                }
+                // 每次按当前选项同步，避免上一次加密的图层状态残留
+                layer.IsPlottable = !options.DisablePlot;
+                layer.IsLocked = options.DisableSelect;
                 return layerId;
             }
             else
@@ -67,7 +193,7 @@ namespace CadLockPlugin
                 {
                     Name = LockLayerName,
                     IsPlottable = !options.DisablePlot,
-                    IsLocked = options.DisableSnap
+                    IsLocked = options.DisableSelect
                 };
                 ObjectId layerId = lt.Add(layer);
                 tr.AddNewlyCreatedDBObject(layer, true);
@@ -76,16 +202,160 @@ namespace CadLockPlugin
         }
 
         /// <summary>
-        /// 核心加密方法：对指定的实体集合进行分块与多层嵌套不可炸开块包装
+        /// 解锁后恢复加密图层的正常状态
+        /// </summary>
+        public static void ResetLockLayer(Database db, Transaction tr)
+        {
+            ObjectId layerId = FindLockLayerId(db, tr);
+            if (layerId.IsNull) return;
+
+            var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForWrite, false);
+            if (layer == null) return;
+            layer.IsLocked = false;
+            layer.IsPlottable = true;
+        }
+
+        /// <summary>
+        /// 获取图纸中所有可加密空间：模型空间 + 全部布局(图纸空间)
+        /// 只处理模型空间会导致「整张图都在布局里」的图纸加密后毫无变化
+        /// </summary>
+        public static List<ObjectId> GetAllSpaceIds(Database db, Transaction tr)
+        {
+            var spaces = new List<ObjectId>();
+
+            try
+            {
+                ObjectId msId = SymbolUtilityServices.GetBlockModelSpaceId(db);
+                if (!msId.IsNull) spaces.Add(msId);
+            }
+            catch
+            {
+                // 极端损坏的图纸忽略模型空间
+            }
+
+            try
+            {
+                var layoutDict = (DBDictionary)tr.GetObject(db.LayoutDictionaryId, OpenMode.ForRead, false);
+                if (layoutDict != null)
+                {
+                    foreach (DBDictionaryEntry entry in layoutDict)
+                    {
+                        var layout = tr.GetObject(entry.Value, OpenMode.ForRead, false) as Layout;
+                        if (layout == null) continue;
+                        ObjectId btrId = layout.BlockTableRecordId;
+                        if (btrId.IsNull || spaces.Contains(btrId)) continue;
+                        spaces.Add(btrId);
+                    }
+                }
+            }
+            catch
+            {
+                // 布局字典异常时仅处理模型空间
+            }
+
+            return spaces;
+        }
+
+        /// <summary>
+        /// 获取某个空间(块表记录)中的全部对象ID
+        /// </summary>
+        public static List<ObjectId> GetSpaceEntityIds(Transaction tr, ObjectId spaceId)
+        {
+            var ids = new List<ObjectId>();
+            var btr = tr.GetObject(spaceId, OpenMode.ForRead, false) as BlockTableRecord;
+            if (btr == null) return ids;
+            foreach (ObjectId id in btr)
+            {
+                ids.Add(id);
+            }
+            return ids;
+        }
+
+        /// <summary>
+        /// 过滤掉无法安全封装进块定义的对象：
+        /// 布局视口、已在加密图层上的对象、锁定图层上的对象、非实体对象
+        /// </summary>
+        public static List<ObjectId> FilterLockableEntities(Database db, Transaction tr, IEnumerable<ObjectId> ids)
+        {
+            var result = new List<ObjectId>();
+            if (ids == null) return result;
+
+            ObjectId lockLayerId = FindLockLayerId(db, tr);
+            var layerLockCache = new Dictionary<ObjectId, bool>();
+
+            foreach (var id in ids)
+            {
+                if (id.IsNull || id.IsErased || !id.IsValid) continue;
+
+                DBObject obj;
+                try
+                {
+                    obj = tr.GetObject(id, OpenMode.ForRead, false);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if (obj == null || obj.IsErased) continue;
+                if (!(obj is Entity ent)) continue;
+
+                // 视口等对象不允许被 AppendEntity 到块定义中
+                if (ent is Viewport) continue;
+
+                // 已经在加密图层上的对象，避免重复封装
+                if (!lockLayerId.IsNull && ent.LayerId == lockLayerId) continue;
+
+                // 锁定图层上的对象无法被擦除/克隆
+                if (IsLayerLocked(tr, ent.LayerId, layerLockCache)) continue;
+
+                result.Add(id);
+            }
+
+            return result;
+        }
+
+        private static bool IsLayerLocked(Transaction tr, ObjectId layerId, Dictionary<ObjectId, bool> cache)
+        {
+            if (layerId.IsNull) return false;
+
+            if (cache.TryGetValue(layerId, out bool locked)) return locked;
+
+            try
+            {
+                var layer = (LayerTableRecord)tr.GetObject(layerId, OpenMode.ForRead);
+                locked = layer.IsLocked;
+            }
+            catch
+            {
+                locked = false;
+            }
+
+            cache[layerId] = locked;
+            return locked;
+        }
+
+        /// <summary>
+        /// 对当前空间执行加密
         /// </summary>
         public static List<ObjectId> LockEntities(Database db, Transaction tr, IEnumerable<ObjectId> initialEntityIds, CadLockOptions options)
         {
-            ObjectId lockLayerId = GetOrCreateLockLayer(db, tr, options);
-            var currentSpace = (BlockTableRecord)tr.GetObject(db.CurrentSpaceId, OpenMode.ForWrite);
-            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
+            return LockEntities(db, tr, db.CurrentSpaceId, initialEntityIds, options);
+        }
 
-            List<ObjectId> currentRoundIds = new List<ObjectId>(initialEntityIds);
-            if (currentRoundIds.Count == 0) return currentRoundIds;
+        /// <summary>
+        /// 核心加密方法：对指定空间内的实体集合进行分块与多层嵌套不可炸开块包装
+        /// 返回最外层生成的加密块参照ID，为空表示本次没有任何图元被加密
+        /// </summary>
+        public static List<ObjectId> LockEntities(Database db, Transaction tr, ObjectId spaceId, IEnumerable<ObjectId> initialEntityIds, CadLockOptions options)
+        {
+            // 先剔除不能封装进块定义的对象，避免中途抛异常导致整张图纸加密失败
+            List<ObjectId> currentRoundIds = FilterLockableEntities(db, tr, initialEntityIds);
+            if (currentRoundIds.Count == 0) return new List<ObjectId>();
+
+            ObjectId lockLayerId = GetOrCreateLockLayer(db, tr, options);
+            var currentSpace = (BlockTableRecord)tr.GetObject(spaceId, OpenMode.ForWrite);
+            var bt = (BlockTable)tr.GetObject(db.BlockTableId, OpenMode.ForWrite);
 
             int repeatCount = Math.Max(1, options.RepeatCount);
             int splitCount = Math.Max(1, options.SplitCount);
@@ -151,26 +421,209 @@ namespace CadLockPlugin
                 currentRoundIds = nextRoundIds;
             }
 
-            MarkDrawingAsLocked(db, tr);
+            if (currentRoundIds.Count > 0)
+            {
+                MarkDrawingAsLocked(db, tr);
+                SaveProtectionOptions(db, tr, options);
+            }
+
             return currentRoundIds;
         }
 
         /// <summary>
-        /// 批量加密离线 DWG 文件 (后台静默读取与保存)
+        /// 对模型空间与全部布局执行加密，返回生成的加密块参照总数
         /// </summary>
-        public static void BatchLockFiles(IEnumerable<string> filePaths, CadLockOptions options, Action<string, bool, string>? progressCallback = null)
+        public static List<ObjectId> LockAllSpaces(Database db, Transaction tr, CadLockOptions options)
         {
+            var created = new List<ObjectId>();
+
+            foreach (var spaceId in GetAllSpaceIds(db, tr))
+            {
+                try
+                {
+                    var ids = GetSpaceEntityIds(tr, spaceId);
+                    if (ids.Count == 0) continue;
+                    created.AddRange(LockEntities(db, tr, spaceId, ids, options));
+                }
+                catch
+                {
+                    // 单个布局加密失败不影响其它空间，最终由调用方按加密块数量判定结果
+                }
+            }
+
+            return created;
+        }
+
+        /// <summary>
+        /// 解锁指定空间：把加密匿名块中的图元还原回原空间，并删除加密块
+        /// 返回成功还原的加密块数量
+        /// </summary>
+        public static int UnlockSpaces(Database db, Transaction tr, IEnumerable<ObjectId> spaceIds)
+        {
+            ObjectId lockLayerId = FindLockLayerId(db, tr);
+            if (lockLayerId.IsNull) return 0;
+
+            // 先解除图层锁定：锁定图层上的对象无法被擦除，否则加密块拆不掉
+            ResetLockLayer(db, tr);
+
+            int count = 0;
+
+            foreach (var spaceId in spaceIds)
+            {
+                try
+                {
+                    count += UnlockSpace(tr, spaceId, lockLayerId);
+                }
+                catch
+                {
+                    // 单个空间解锁失败不影响其它空间
+                }
+            }
+
+            if (count > 0)
+            {
+                RemoveLockMark(db, tr);
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// 解锁全部空间 (模型空间 + 布局)
+        /// </summary>
+        public static int UnlockAllSpaces(Database db, Transaction tr)
+        {
+            return UnlockSpaces(db, tr, GetAllSpaceIds(db, tr));
+        }
+
+        private static int UnlockSpace(Transaction tr, ObjectId spaceId, ObjectId lockLayerId)
+        {
+            // 必须 ForWrite：还原时要往该空间 AppendEntity，ForRead 会抛 eNotOpenForWrite
+            var space = tr.GetObject(spaceId, OpenMode.ForWrite, false) as BlockTableRecord;
+            if (space == null) return 0;
+
+            int count = 0;
+
+            // 加密是多层嵌套的，每拆一层都会暴露下一层加密块，必须循环到该空间内不再有加密块
+            for (int depth = 0; depth < 256; depth++)
+            {
+                var targets = new List<ObjectId>();
+                foreach (ObjectId id in space)
+                {
+                    BlockReference? br;
+                    try
+                    {
+                        br = tr.GetObject(id, OpenMode.ForRead, false) as BlockReference;
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    if (br == null) continue;
+                    // 只处理放在加密图层上的块参照，避免误伤普通图块
+                    if (br.LayerId != lockLayerId) continue;
+                    targets.Add(id);
+                }
+
+                if (targets.Count == 0) break;
+
+                bool any = false;
+                foreach (var brId in targets)
+                {
+                    if (ExplodeLockBlock(tr, space, brId))
+                    {
+                        count++;
+                        any = true;
+                    }
+                }
+
+                // 一层都拆不动时退出，防止死循环
+                if (!any) break;
+            }
+
+            return count;
+        }
+
+        /// <summary>
+        /// 把加密块拆解回普通图元 (仅匿名块)，成功返回 true
+        /// </summary>
+        private static bool ExplodeLockBlock(Transaction tr, BlockTableRecord space, ObjectId brId)
+        {
+            var clones = new List<Entity>();
+            BlockReference? br = null;
+            BlockTableRecord? btr = null;
+
+            try
+            {
+                br = tr.GetObject(brId, OpenMode.ForRead, false) as BlockReference;
+                if (br == null) return false;
+
+                btr = tr.GetObject(br.BlockTableRecord, OpenMode.ForRead, false) as BlockTableRecord;
+                // 只拆本插件生成的匿名块，命名块一律不动
+                if (btr == null || !btr.IsAnonymous) return false;
+
+                foreach (ObjectId childId in btr)
+                {
+                    var child = tr.GetObject(childId, OpenMode.ForRead, false) as Entity;
+                    if (child == null) continue;
+
+                    var clone = (Entity)child.Clone();
+                    clone.TransformBy(br.BlockTransform);
+                    clones.Add(clone);
+                }
+            }
+            catch
+            {
+                foreach (var c in clones) c.Dispose();
+                return false;
+            }
+
+            try
+            {
+                foreach (var c in clones)
+                {
+                    space.AppendEntity(c);
+                    tr.AddNewlyCreatedDBObject(c, true);
+                }
+
+                br.UpgradeOpen();
+                br.Erase(true);
+
+                btr.UpgradeOpen();
+                btr.Erase(true);
+                return true;
+            }
+            catch
+            {
+                foreach (var c in clones)
+                {
+                    if (!c.IsErased && !c.IsDisposed) c.Dispose();
+                }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// 批量加密离线 DWG 文件 (后台静默读取与保存)
+        /// options.ReplaceOriginalFile = true 时直接覆盖原文件，不再生成 _lock 副本
+        /// </summary>
+        public static void BatchLockFiles(IEnumerable<string> filePaths, CadLockOptions options, Action<string, BatchLockResult, string>? progressCallback = null)
+        {
+            if (filePaths == null || options == null) return;
+
             foreach (var filePath in filePaths)
             {
-                if (!File.Exists(filePath)) continue;
-
-                string dir = Path.GetDirectoryName(filePath) ?? "";
-                string fileName = Path.GetFileNameWithoutExtension(filePath);
-                string ext = Path.GetExtension(filePath);
-                string outPath = Path.Combine(dir, $"{fileName}_lock{ext}");
+                if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                {
+                    progressCallback?.Invoke(filePath ?? string.Empty, BatchLockResult.Failed, "文件不存在");
+                    continue;
+                }
 
                 try
                 {
+                    string savedPath;
+
                     using (var db = new Database(false, true))
                     {
                         db.ReadDwgFile(filePath, FileOpenMode.OpenForReadAndAllShare, false, string.Empty);
@@ -178,33 +631,204 @@ namespace CadLockPlugin
 
                         using (var tr = db.TransactionManager.StartTransaction())
                         {
-                            var modelSpace = (BlockTableRecord)tr.GetObject(
-                                SymbolUtilityServices.GetBlockModelSpaceId(db), OpenMode.ForRead);
-
-                            var entityIds = new List<ObjectId>();
-                            foreach (ObjectId id in modelSpace)
+                            if (IsDrawingLocked(db, tr))
                             {
-                                entityIds.Add(id);
+                                progressCallback?.Invoke(filePath, BatchLockResult.Skipped, "图纸已经过加密处理，已跳过");
+                                continue;
                             }
 
-                            if (entityIds.Count > 0)
+                            var created = LockAllSpaces(db, tr, options);
+                            if (created.Count == 0)
                             {
-                                LockEntities(db, tr, entityIds, options);
+                                // 以前这里会静默保存并报告成功，实际什么都没锁
+                                progressCallback?.Invoke(filePath, BatchLockResult.Skipped,
+                                    "未找到可加密图元（空图纸，或图元全部位于锁定/加密图层）");
+                                continue;
                             }
 
                             tr.Commit();
                         }
 
-                        db.SaveAs(outPath, DwgVersion.Current);
+                        savedPath = WriteDatabase(db, filePath, options.ReplaceOriginalFile, LockSuffix);
                     }
 
-                    progressCallback?.Invoke(filePath, true, outPath);
+                    if (options.ReplaceOriginalFile)
+                    {
+                        // 原文件必须在数据库释放后再覆盖：数据库仍打开时替换会让 AutoCAD 的文件映射失效
+                        string tempPath = savedPath;
+                        savedPath = filePath;
+                        CommitReplace(tempPath, filePath);
+                    }
+
+                    progressCallback?.Invoke(filePath, BatchLockResult.Success,
+                        options.ReplaceOriginalFile ? "已加密并覆盖原文件" : savedPath);
                 }
                 catch (Exception ex)
                 {
-                    progressCallback?.Invoke(filePath, false, ex.Message);
+                    progressCallback?.Invoke(filePath, BatchLockResult.Failed, ex.Message);
                 }
             }
         }
+
+        /// <summary>
+        /// 批量解锁离线 DWG 文件
+        /// options.ReplaceOriginalFile = true 时直接覆盖原文件，不再生成 _unlock 副本
+        /// </summary>
+        public static void BatchUnlockFiles(IEnumerable<string> filePaths, CadLockOptions options, Action<string, BatchLockResult, string>? progressCallback = null)
+        {
+            if (filePaths == null || options == null) return;
+
+            foreach (var filePath in filePaths)
+            {
+                if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+                {
+                    progressCallback?.Invoke(filePath ?? string.Empty, BatchLockResult.Failed, "文件不存在");
+                    continue;
+                }
+
+                try
+                {
+                    string savedPath;
+
+                    using (var db = new Database(false, true))
+                    {
+                        db.ReadDwgFile(filePath, FileOpenMode.OpenForReadAndAllShare, false, string.Empty);
+                        db.CloseInput(true);
+
+                        using (var tr = db.TransactionManager.StartTransaction())
+                        {
+                            bool marked = IsDrawingLocked(db, tr);
+                            bool hasLayer = !FindLockLayerId(db, tr).IsNull;
+                            if (!marked && !hasLayer)
+                            {
+                                progressCallback?.Invoke(filePath, BatchLockResult.Skipped, "图纸未被加密，无需解锁");
+                                continue;
+                            }
+
+                            int unlocked = UnlockAllSpaces(db, tr);
+                            if (unlocked == 0)
+                            {
+                                progressCallback?.Invoke(filePath, BatchLockResult.Skipped, "未找到可还原的加密图形");
+                                continue;
+                            }
+
+                            tr.Commit();
+                        }
+
+                        savedPath = WriteDatabase(db, filePath, options.ReplaceOriginalFile, UnlockSuffix);
+                    }
+
+                    if (options.ReplaceOriginalFile)
+                    {
+                        string tempPath = savedPath;
+                        savedPath = filePath;
+                        CommitReplace(tempPath, filePath);
+                    }
+
+                    progressCallback?.Invoke(filePath, BatchLockResult.Success,
+                        options.ReplaceOriginalFile ? "已解锁并覆盖原文件" : savedPath);
+                }
+                catch (Exception ex)
+                {
+                    progressCallback?.Invoke(filePath, BatchLockResult.Failed, ex.Message);
+                }
+            }
+        }
+
+        /// <summary>
+        /// 保存数据库：replaceOriginal=true 时先写到同目录临时文件(稍后由 CommitReplace 覆盖原图)，
+        /// 否则写入带后缀的新文件。返回实际写入的路径
+        /// </summary>
+        private static string WriteDatabase(Database db, string sourcePath, bool replaceOriginal, string suffix)
+        {
+            string dir = Path.GetDirectoryName(sourcePath) ?? string.Empty;
+            string fileName = Path.GetFileNameWithoutExtension(sourcePath);
+            string ext = Path.GetExtension(sourcePath);
+
+            // 尽量按原图纸版本保存，避免低版本图纸被静默升级
+            DwgVersion version;
+            try
+            {
+                version = db.OriginalFileVersion;
+            }
+            catch
+            {
+                version = DwgVersion.Current;
+            }
+
+            if (!replaceOriginal)
+            {
+                string outPath = GetUniqueOutputPath(dir, fileName + suffix, ext);
+                db.SaveAs(outPath, version);
+                return outPath;
+            }
+
+            string tempPath = Path.Combine(dir, "." + fileName + "." + Guid.NewGuid().ToString("N") + ext);
+            db.SaveAs(tempPath, version);
+            return tempPath;
+        }
+
+        /// <summary>
+        /// 用临时文件覆盖目标文件（必须在数据库 Dispose 之后调用），并清理临时文件
+        /// </summary>
+        private static void CommitReplace(string tempPath, string targetPath)
+        {
+            try
+            {
+                if (File.Exists(targetPath))
+                {
+                    var attrs = File.GetAttributes(targetPath);
+                    if ((attrs & FileAttributes.ReadOnly) != 0)
+                    {
+                        throw new IOException("原文件为只读属性，无法替换，请先取消只读");
+                    }
+
+                    try
+                    {
+                        File.Replace(tempPath, targetPath, null, true);
+                        return;
+                    }
+                    catch (PlatformNotSupportedException)
+                    {
+                        // 回退到复制覆盖
+                    }
+                    catch (IOException)
+                    {
+                        // 跨卷或占用时回退到复制覆盖，仍失败则抛给上层报告
+                    }
+                }
+
+                File.Copy(tempPath, targetPath, true);
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                {
+                    try { File.Delete(tempPath); } catch { /* 临时文件清理失败不影响结果 */ }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 输出文件名已存在时自动追加序号，避免静默覆盖上一次的结果
+        /// </summary>
+        private static string GetUniqueOutputPath(string dir, string fileName, string ext)
+        {
+            string path = Path.Combine(dir, fileName + ext);
+            int index = 1;
+            while (File.Exists(path))
+            {
+                path = Path.Combine(dir, fileName + "(" + index + ")" + ext);
+                index++;
+            }
+            return path;
+        }
+    }
+
+    public enum BatchLockResult
+    {
+        Success,
+        Skipped,
+        Failed
     }
 }

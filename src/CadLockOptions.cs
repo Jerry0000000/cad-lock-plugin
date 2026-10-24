@@ -15,9 +15,11 @@ namespace CadLockPlugin
         public int RepeatCount { get; set; } = 10;
 
         /// <summary>
-        /// 不可捕捉 (将对象放置在锁定图层并禁用捕捉点)
+        /// 不可选中 (将加密块放置在锁定图层，从而无法被选中、编辑或删除)
+        /// 注意：图层锁定不影响对象捕捉(OSNAP)，AutoCAD 没有图层级捕捉开关
+        /// 默认开启：图层锁定是 AutoCAD 原生行为，锁状态随图纸保存，未装插件的 CAD 里同样选不中
         /// </summary>
-        public bool DisableSnap { get; set; } = false;
+        public bool DisableSelect { get; set; } = true;
 
         /// <summary>
         /// 不可打印 (设置图层为不打印)
@@ -33,5 +35,10 @@ namespace CadLockPlugin
         /// 不可删除 (拦截 ObjectErased 事件)
         /// </summary>
         public bool DisableDelete { get; set; } = false;
+
+        /// <summary>
+        /// 批量处理时直接替换原文件 (不生成 _lock / _unlock 副本)
+        /// </summary>
+        public bool ReplaceOriginalFile { get; set; } = false;
     }
 }
